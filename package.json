@@ -1,7 +1,15 @@
 {
-  "name": "@salvage/c1-datatype",
+  "name": "patchkit",
   "version": "0.1.0",
-  "description": "Polymorphic DataType interface and primitives salvaged from Console One (commit 054f22cf2)",
+  "description": "Polymorphic DataType interface for version control over arbitrary data (Object, Array, Set, Source/text)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/console-one/patchkit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/console-one/patchkit/issues"
+  },
+  "homepage": "https://github.com/console-one/patchkit#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

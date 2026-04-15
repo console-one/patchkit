@@ -1,4 +1,4 @@
-# @salvage/c1-datatype
+# patchkit
 
 A polymorphic `DataType` interface for version control over arbitrary data structures, plus reference implementations for **Object**, **Array**, **Set**, and **Source** (text).
 
@@ -7,7 +7,7 @@ Every type implements the same five operations — `applyPatch`, `diff`, `collat
 ## Install
 
 ```bash
-npm install @salvage/c1-datatype
+npm install patchkit
 ```
 
 One runtime dependency: `diff-match-patch` (used by the `Source` type for text diffing).
@@ -22,7 +22,7 @@ import {
   OBJECT_COMMAND,
   CaptureGroup,
   CaptureGroupSet,
-} from "@salvage/c1-datatype";
+} from "patchkit";
 
 const typeset = new Typeset("my-app");
 const object = new ObjectType(typeset);
@@ -69,7 +69,7 @@ import {
   ArrayType, ArrayPatchBuilder,
   Source,
   Typeset,
-} from "@salvage/c1-datatype";
+} from "patchkit";
 
 const ts = new Typeset("demo");
 const sets = new SetType(ts);
@@ -84,7 +84,7 @@ source.diff({ text: "hello" }, { text: "hello world" });
 ### Polymorphic dispatch with `AnyType`
 
 ```ts
-import { Typeset, SetType, ObjectType, AnyType } from "@salvage/c1-datatype";
+import { Typeset, SetType, ObjectType, AnyType } from "patchkit";
 
 const ts = new Typeset("mixed");
 new SetType(ts);
@@ -123,18 +123,11 @@ Contract laws enforced by the test suite:
 
 **What's not:** commits, snapshots, persistence, scheduling, remoting. Those are up to whatever VCS, CRDT, or event-sourcing layer you build on top.
 
-## Provenance
+## Background
 
-Extracted from Console One, a collaborative web-based IDE with a custom VCS, build system, multi-language transpiler, and AWS Lambda deployment target. The project spanned roughly four years before being shelved in March 2025. This library salvages the primitives that the original authors flagged as genuinely reusable — the type system design — and rewrites the parts that were too entangled with Proxy-based config threading and subscription machinery to port verbatim.
+patchkit grew out of a larger IDE project the author worked on for several years. The type system was the most reusable piece — a polymorphic `DataType` interface with per-type patch/diff/collate semantics — and this library extracts and cleans it up for general use. The VCS layer it originally lived inside (commits, snapshots, persistence) is intentionally not included here; those are concerns for whatever storage layer you build on top.
 
-**Source commit:** `054f22cf2ef636c466d53dee7bbe9e33bf76292a` ("A month and a half of floundering", 2025-03-12)
-**Source subtree:** `server/src/core/lambda-test/vcs/types/`
-
-The salvageability analysis is documented in two internal specs:
-- `vcs-type-system-extract.md` §8 "If Rebuilding"
-- `patch-chain-vcs-spec.md` §10 "Design Recommendations for Reuse"
-
-See `MIGRATION.md` for a full list of intentional divergences from the original source.
+See `MIGRATION.md` for notes on how this version differs from the original implementation.
 
 ## License
 
