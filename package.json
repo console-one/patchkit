@@ -1,5 +1,5 @@
 {
-  "name": "patchkit",
+  "name": "@console-one/patchkit",
   "version": "0.1.0",
   "description": "Polymorphic DataType interface for version control over arbitrary data (Object, Array, Set, Source/text)",
   "repository": {
