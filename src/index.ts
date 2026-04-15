@@ -5,3 +5,4 @@ export * from "./types/set.js";
 export * from "./types/array.js";
 export * from "./types/source.js";
 export * from "./types/object.js";
+export * from "./types/any.js";
