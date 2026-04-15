@@ -1,0 +1,40 @@
+{
+  "name": "@salvage/c1-datatype",
+  "version": "0.1.0",
+  "description": "Polymorphic DataType interface and primitives salvaged from Console One (commit 054f22cf2)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "MIGRATION.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "version-control",
+    "patch",
+    "diff",
+    "collate",
+    "datatype",
+    "type-system"
+  ],
+  "author": "Andrew Chalmers",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  }
+}
