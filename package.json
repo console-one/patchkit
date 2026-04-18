@@ -1,7 +1,7 @@
 {
   "name": "@console-one/patchkit",
-  "version": "0.1.0",
-  "description": "Polymorphic DataType interface for version control over arbitrary data (Object, Array, Set, Source/text)",
+  "version": "0.2.0",
+  "description": "Polymorphic DataType interface for version control over arbitrary data (Object, Array, Set, Source/text) with a live-mutation Ledger on top",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/console-one/patchkit.git"
@@ -36,7 +36,11 @@
     "diff",
     "collate",
     "datatype",
-    "type-system"
+    "type-system",
+    "history",
+    "rollback",
+    "ledger",
+    "undo"
   ],
   "author": "Andrew Chalmers",
   "license": "MIT",

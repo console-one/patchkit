@@ -4,6 +4,8 @@ A polymorphic `DataType` interface for version control over arbitrary data struc
 
 Every type implements the same five operations — `applyPatch`, `diff`, `collate`, `query`, `recognize` — so a VCS layer above can work generically against any data structure without knowing what it's versioning.
 
+Also ships **`Ledger`** / **`ledger()`** — a live-mutation wrapper that makes `obj.foo = 'bar'` transparently commit a patch to a history you can inspect and roll back. See [Live tracking](#live-tracking-with-ledger) below.
+
 ## Install
 
 ```bash
@@ -94,6 +96,56 @@ const any = new AnyType(ts);
 any.applyPatch(setPatch, new Set([1, 2]));       // delegates to SetType
 any.applyPatch(objectPatch, { __type: "object:state" }); // delegates to ObjectType
 ```
+
+## Live tracking with `Ledger`
+
+The `applyPatch` / `diff` API is pure and functional — you hand in state, you get state back. Sometimes what you actually want is a live object you can mutate the usual way, while the library quietly records what happened so you can inspect the history or undo it.
+
+`ledger()` wraps an object in a `Proxy` that turns every mutation into a committed patch on a running history. Rollback applies the stored inverses in reverse. The patch algebra comes from whichever `DataType` you pass in, so the same ledger shape works for Object, Array, Set, or Source state.
+
+```ts
+import { Typeset, ObjectType, ledger } from "patchkit";
+
+const ts = new Typeset("app");
+const type = new ObjectType(ts);
+
+const app = ledger({ __type: "object:state", name: "Andrew", role: "eng" }, { type });
+
+// Mutate like a normal object — every change becomes a committed patch.
+app.state.role = "architect";
+app.state.team = "infra";
+delete app.state.name;
+
+app.history.length;        // 3
+app.history[0].patch;      // { __type: 'object:patch', role: { command: 'SET', value: 'architect' } }
+app.history[0].inverse;    // { __type: 'object:patch', role: { command: 'SET', value: 'eng' } }
+app.history[0].at;         // Date
+
+// Rollback applies inverses in reverse
+app.rollback();            // undo last
+app.rollback(2);           // undo last two
+app.state.name;            // 'Andrew' — restored
+
+// Checkpoint + restore for speculative branching
+const save = app.checkpoint();
+app.state.role = "ops";
+app.state.role = "pm";
+app.restore(save);         // rewind; history truncated to the checkpoint
+
+// Snapshot escapes the proxy (useful for JSON.stringify, serialization, etc.)
+app.snapshot;              // plain object, not the proxy
+```
+
+### What this gives you over manual `diff` / `applyPatch`
+
+- **Ergonomic mutation**: `obj.foo = 'bar'` instead of hand-rolled patch manifests.
+- **Correct inverses for free**: each entry stores both the forward patch and its inverse — computed via `type.diff(after, before)`, so rollback of *modifications* (not just adds/deletes) is covered. That's the structural hole in most hand-written "undo log" schemes.
+- **Inspectable, serializable entries**: each history entry is a real patchkit patch — replayable on any other state, shippable over the wire, renderable as an audit trail.
+- **Polymorphic**: pass any `DataType` implementation, not just Object. The same ledger shape wraps Array, Set, Source, or custom types.
+
+### Scope
+
+The proxy is **shallow**. Nested mutations like `state.nested.x = 'y'` are not captured — reassign the subtree (`state.nested = { ...state.nested, x: 'y' }`) so the outer `set` trap fires. A deep-proxy variant is a natural extension; it's not in v0.2.
 
 ## The `DataType` contract
 
