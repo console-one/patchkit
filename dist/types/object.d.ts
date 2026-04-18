@@ -8,6 +8,14 @@ export declare const OBJECT_COMMAND: {
     readonly PATCH: "PATCH";
 };
 export type ObjectCommandKind = (typeof OBJECT_COMMAND)[keyof typeof OBJECT_COMMAND];
+export declare const COLLATE_STRATEGY: {
+    readonly OVERRIDE: "OVERRIDE";
+    readonly UNDERRIDE: "UNDERRIDE";
+};
+export type CollateStrategy = (typeof COLLATE_STRATEGY)[keyof typeof COLLATE_STRATEGY];
+export interface ObjectCollateConfig extends CollateConfig {
+    strategy?: CollateStrategy;
+}
 export interface ObjectCommand {
     command: ObjectCommandKind;
     value?: unknown;
@@ -49,7 +57,22 @@ export declare class ObjectType extends DataType<ObjectState, ObjectPatch, Objec
         state: ObjectState;
     };
     diff(before: ObjectState, after: ObjectState, _configs?: DiffConfig): ObjectPatch;
-    collate(patches: ObjectPatch[], _configs?: CollateConfig): ObjectPatch;
+    /**
+     * Fuse patches into one. Two strategies are supported:
+     *
+     *   - `OVERRIDE` (default): later patches override earlier ones at the same key.
+     *     This is the intuitive "apply in order, last write wins" semantic.
+     *   - `UNDERRIDE`: earlier patches win; later patches only fill in keys the
+     *     earlier patch doesn't mention. Useful for applying defaults or
+     *     merging partial patches onto an in-progress patch without clobbering.
+     *
+     * In both strategies, when existing and incoming are BOTH nested ObjectPatches
+     * at the same key, collate recurses into them (same strategy propagates).
+     *
+     * The config argument can be a strategy string directly (`"UNDERRIDE"`) or a
+     * config object with `{ strategy }`.
+     */
+    collate(patches: ObjectPatch[], configs?: CollateConfig | CollateStrategy): ObjectPatch;
     query(state: ObjectState, query: ObjectQuery, _configs?: QueryConfig): unknown;
     private contextFrom;
 }

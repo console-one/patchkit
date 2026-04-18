@@ -7,8 +7,24 @@ export const OBJECT_COMMAND = {
     COPY: "COPY",
     PATCH: "PATCH",
 };
+export const COLLATE_STRATEGY = {
+    OVERRIDE: "OVERRIDE",
+    UNDERRIDE: "UNDERRIDE",
+};
 function isCaptureString(value) {
     return CaptureGroup.describesJSON(value);
+}
+function resolveStrategy(configs) {
+    if (configs === COLLATE_STRATEGY.OVERRIDE || configs === COLLATE_STRATEGY.UNDERRIDE) {
+        return configs;
+    }
+    if (configs && typeof configs === "object") {
+        const s = configs.strategy;
+        if (s === COLLATE_STRATEGY.OVERRIDE || s === COLLATE_STRATEGY.UNDERRIDE) {
+            return s;
+        }
+    }
+    return COLLATE_STRATEGY.OVERRIDE;
 }
 function isCommand(value) {
     if (typeof value !== "object" || value === null)
@@ -216,7 +232,23 @@ export class ObjectType extends DataType {
         }
         return patch;
     }
-    collate(patches, _configs) {
+    /**
+     * Fuse patches into one. Two strategies are supported:
+     *
+     *   - `OVERRIDE` (default): later patches override earlier ones at the same key.
+     *     This is the intuitive "apply in order, last write wins" semantic.
+     *   - `UNDERRIDE`: earlier patches win; later patches only fill in keys the
+     *     earlier patch doesn't mention. Useful for applying defaults or
+     *     merging partial patches onto an in-progress patch without clobbering.
+     *
+     * In both strategies, when existing and incoming are BOTH nested ObjectPatches
+     * at the same key, collate recurses into them (same strategy propagates).
+     *
+     * The config argument can be a strategy string directly (`"UNDERRIDE"`) or a
+     * config object with `{ strategy }`.
+     */
+    collate(patches, configs) {
+        const strategy = resolveStrategy(configs);
         const result = { __type: `${this.name}:patch` };
         for (const p of patches) {
             for (const key of Object.keys(p)) {
@@ -224,12 +256,18 @@ export class ObjectType extends DataType {
                     continue;
                 const incoming = p[key];
                 const existing = result[key];
-                if (isNestedPatch(existing, this.name) && isNestedPatch(incoming, this.name)) {
-                    result[key] = this.collate([existing, incoming]);
-                }
-                else {
+                if (existing === undefined) {
                     result[key] = incoming;
+                    continue;
                 }
+                if (isNestedPatch(existing, this.name) && isNestedPatch(incoming, this.name)) {
+                    result[key] = this.collate([existing, incoming], strategy);
+                    continue;
+                }
+                if (strategy === COLLATE_STRATEGY.UNDERRIDE) {
+                    continue;
+                }
+                result[key] = incoming;
             }
         }
         return result;

@@ -22,6 +22,17 @@ export const OBJECT_COMMAND = {
 
 export type ObjectCommandKind = (typeof OBJECT_COMMAND)[keyof typeof OBJECT_COMMAND];
 
+export const COLLATE_STRATEGY = {
+  OVERRIDE: "OVERRIDE",
+  UNDERRIDE: "UNDERRIDE",
+} as const;
+
+export type CollateStrategy = (typeof COLLATE_STRATEGY)[keyof typeof COLLATE_STRATEGY];
+
+export interface ObjectCollateConfig extends CollateConfig {
+  strategy?: CollateStrategy;
+}
+
 export interface ObjectCommand {
   command: ObjectCommandKind;
   value?: unknown;
@@ -49,6 +60,19 @@ export interface ObjectPatchContext {
 
 function isCaptureString(value: unknown): value is string {
   return CaptureGroup.describesJSON(value);
+}
+
+function resolveStrategy(configs?: CollateConfig | CollateStrategy): CollateStrategy {
+  if (configs === COLLATE_STRATEGY.OVERRIDE || configs === COLLATE_STRATEGY.UNDERRIDE) {
+    return configs;
+  }
+  if (configs && typeof configs === "object") {
+    const s = (configs as ObjectCollateConfig).strategy;
+    if (s === COLLATE_STRATEGY.OVERRIDE || s === COLLATE_STRATEGY.UNDERRIDE) {
+      return s;
+    }
+  }
+  return COLLATE_STRATEGY.OVERRIDE;
 }
 
 function isCommand(value: unknown): value is ObjectCommand {
@@ -261,18 +285,44 @@ export class ObjectType extends DataType<ObjectState, ObjectPatch, ObjectQuery> 
     return patch;
   }
 
-  collate(patches: ObjectPatch[], _configs?: CollateConfig): ObjectPatch {
+  /**
+   * Fuse patches into one. Two strategies are supported:
+   *
+   *   - `OVERRIDE` (default): later patches override earlier ones at the same key.
+   *     This is the intuitive "apply in order, last write wins" semantic.
+   *   - `UNDERRIDE`: earlier patches win; later patches only fill in keys the
+   *     earlier patch doesn't mention. Useful for applying defaults or
+   *     merging partial patches onto an in-progress patch without clobbering.
+   *
+   * In both strategies, when existing and incoming are BOTH nested ObjectPatches
+   * at the same key, collate recurses into them (same strategy propagates).
+   *
+   * The config argument can be a strategy string directly (`"UNDERRIDE"`) or a
+   * config object with `{ strategy }`.
+   */
+  collate(
+    patches: ObjectPatch[],
+    configs?: CollateConfig | CollateStrategy,
+  ): ObjectPatch {
+    const strategy = resolveStrategy(configs);
     const result: ObjectPatch = { __type: `${this.name}:patch` };
     for (const p of patches) {
       for (const key of Object.keys(p)) {
         if (key === "__type") continue;
         const incoming = p[key];
         const existing = result[key];
-        if (isNestedPatch(existing, this.name) && isNestedPatch(incoming, this.name)) {
-          result[key] = this.collate([existing, incoming]);
-        } else {
+        if (existing === undefined) {
           result[key] = incoming;
+          continue;
         }
+        if (isNestedPatch(existing, this.name) && isNestedPatch(incoming, this.name)) {
+          result[key] = this.collate([existing, incoming], strategy);
+          continue;
+        }
+        if (strategy === COLLATE_STRATEGY.UNDERRIDE) {
+          continue;
+        }
+        result[key] = incoming;
       }
     }
     return result;

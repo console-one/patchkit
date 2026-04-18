@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { Typeset } from "../src/core.js";
 import { CaptureGroup, CaptureGroupSet } from "../src/capture.js";
-import { ObjectType, ObjectMutator, OBJECT_COMMAND } from "../src/types/object.js";
+import {
+  ObjectType,
+  ObjectMutator,
+  OBJECT_COMMAND,
+  COLLATE_STRATEGY,
+} from "../src/types/object.js";
 
 const mkType = () => new ObjectType(new Typeset("test"));
 
@@ -190,6 +195,78 @@ describe("ObjectType — contract laws", () => {
     const viaSeq = t.applyPatch(p2, t.applyPatch(p1, a).state).state;
     expect(viaCollate["x"]).toBe(viaSeq["x"]);
     expect(viaCollate["y"]).toBe(viaSeq["y"]);
+  });
+});
+
+describe("ObjectType — collate strategies", () => {
+  const t = mkType();
+
+  it("OVERRIDE (default): later patches win at the same key", () => {
+    const p1 = {
+      __type: "object:patch",
+      role: { command: OBJECT_COMMAND.SET, value: "eng" },
+    };
+    const p2 = {
+      __type: "object:patch",
+      role: { command: OBJECT_COMMAND.SET, value: "architect" },
+    };
+    const out = t.collate([p1, p2]);
+    expect((out.role as { value: string }).value).toBe("architect");
+  });
+
+  it("UNDERRIDE: earlier patches win at the same key", () => {
+    const p1 = {
+      __type: "object:patch",
+      role: { command: OBJECT_COMMAND.SET, value: "eng" },
+    };
+    const p2 = {
+      __type: "object:patch",
+      role: { command: OBJECT_COMMAND.SET, value: "architect" },
+      team: { command: OBJECT_COMMAND.SET, value: "infra" },
+    };
+    const out = t.collate([p1, p2], COLLATE_STRATEGY.UNDERRIDE);
+    expect((out.role as { value: string }).value).toBe("eng"); // earlier wins
+    expect((out.team as { value: string }).value).toBe("infra"); // not in p1, so filled
+  });
+
+  it("strategy can be passed as config object with { strategy }", () => {
+    const p1 = {
+      __type: "object:patch",
+      x: { command: OBJECT_COMMAND.SET, value: 1 },
+    };
+    const p2 = {
+      __type: "object:patch",
+      x: { command: OBJECT_COMMAND.SET, value: 2 },
+    };
+    const out = t.collate([p1, p2], { strategy: COLLATE_STRATEGY.UNDERRIDE });
+    expect((out.x as { value: number }).value).toBe(1);
+  });
+
+  it("recurses into nested patches with the same strategy", () => {
+    const p1 = {
+      __type: "object:patch",
+      settings: {
+        __type: "object:patch",
+        theme: { command: OBJECT_COMMAND.SET, value: "light" },
+      },
+    };
+    const p2 = {
+      __type: "object:patch",
+      settings: {
+        __type: "object:patch",
+        theme: { command: OBJECT_COMMAND.SET, value: "dark" },
+        fontSize: { command: OBJECT_COMMAND.SET, value: 14 },
+      },
+    };
+    const overridden = t.collate([p1, p2]);
+    const inner = overridden.settings as Record<string, { value?: unknown }>;
+    expect((inner.theme as { value: string }).value).toBe("dark");
+    expect((inner.fontSize as { value: number }).value).toBe(14);
+
+    const underridden = t.collate([p1, p2], COLLATE_STRATEGY.UNDERRIDE);
+    const innerU = underridden.settings as Record<string, { value?: unknown }>;
+    expect((innerU.theme as { value: string }).value).toBe("light");
+    expect((innerU.fontSize as { value: number }).value).toBe(14);
   });
 });
 
