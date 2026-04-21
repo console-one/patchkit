@@ -299,5 +299,58 @@ export class Source extends DataType {
     fullQuery(_configs) {
         return { type: "byIndex", start: 0 };
     }
+    /**
+     * Returns a live text handle. Each `insert` / `delete` / `replace` commits
+     * a minimal SourceUpdate (one or two SourceChanges) plus its inverse so
+     * a coordinator can replay or roll back edits without re-diffing.
+     */
+    track(cell, onCommit, _configs) {
+        const self = this;
+        const commit = (forward, inverse) => {
+            if (forward.length === 0)
+                return;
+            const fwdPatch = new SourceUpdate(forward);
+            const invPatch = new SourceUpdate(inverse);
+            cell.set(self.applyPatch(fwdPatch, cell.get()).state);
+            onCommit(fwdPatch, invPatch);
+        };
+        return {
+            get text() {
+                return cell.get().text;
+            },
+            insert(at, chunk) {
+                if (chunk.length === 0)
+                    return;
+                const now = Date.now();
+                commit([{ index: at, change: chunk, type: MUTATION.ADDITION, timestamp: now, length: chunk.length }], [{ index: at, change: chunk, type: MUTATION.DELETION, timestamp: now, length: chunk.length }]);
+            },
+            delete(from, to) {
+                if (to <= from)
+                    return;
+                const current = cell.get().text;
+                const removed = current.slice(from, to);
+                if (removed.length === 0)
+                    return;
+                const now = Date.now();
+                commit([{ index: from, change: removed, type: MUTATION.DELETION, timestamp: now, length: removed.length }], [{ index: from, change: removed, type: MUTATION.ADDITION, timestamp: now, length: removed.length }]);
+            },
+            replace(from, to, chunk) {
+                const current = cell.get().text;
+                const removed = to > from ? current.slice(from, to) : "";
+                const now = Date.now();
+                const forward = [];
+                const inverse = [];
+                if (removed.length > 0) {
+                    forward.push({ index: from, change: removed, type: MUTATION.DELETION, timestamp: now, length: removed.length });
+                    inverse.push({ index: from, change: removed, type: MUTATION.ADDITION, timestamp: now, length: removed.length });
+                }
+                if (chunk.length > 0) {
+                    forward.push({ index: from, change: chunk, type: MUTATION.ADDITION, timestamp: now, length: chunk.length });
+                    inverse.push({ index: from, change: chunk, type: MUTATION.DELETION, timestamp: now, length: chunk.length });
+                }
+                commit(forward, inverse);
+            },
+        };
+    }
 }
 //# sourceMappingURL=source.js.map

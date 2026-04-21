@@ -1,4 +1,4 @@
-import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult } from "../core.js";
+import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult, type OnCommit, type TrackConfig, type StateCell } from "../core.js";
 export declare const ARRAY_OP: {
     readonly INSERT: "insert";
     readonly REMOVE: "remove";
@@ -46,6 +46,22 @@ export declare class ArrayType extends DataType<ArrayState, ArrayPatch, ArrayQue
      */
     collate(patches: ArrayPatch[], _configs?: CollateConfig): ArrayPatch;
     query(state: ArrayState, query: ArrayQuery, _configs?: QueryConfig): unknown;
+    /**
+     * Returns a Proxy over an array-shaped view of the cell. Mutations through
+     * any of the following paths are captured as an ArrayPatch:
+     *
+     *   - index assignment (`arr[i] = v`)  → SET
+     *   - `arr.length = n` (truncation)    → REMOVE
+     *   - `arr.push(...items)`             → INSERT at end
+     *   - `arr.pop()`                      → REMOVE from end
+     *   - `arr.shift()`                    → REMOVE from head
+     *   - `arr.unshift(...items)`          → INSERT at head
+     *   - `arr.splice(at, del, ...items)`  → INSERT/REMOVE composed
+     *
+     * `onCommit` receives a patch with exactly the ops that were performed
+     * plus its inverse (computed from the state before the mutation).
+     */
+    track(cell: StateCell<ArrayState>, onCommit: OnCommit<ArrayPatch>, _configs?: TrackConfig): ArrayState;
 }
 export declare class ArrayPatchBuilder {
     private readonly name;

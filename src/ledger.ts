@@ -1,4 +1,4 @@
-import type { DataType, PatchConfig } from "./core.js";
+import type { DataType, PatchConfig, StateCell } from "./core.js";
 
 /**
  * A single committed mutation in a {@link Ledger}'s history.
@@ -14,8 +14,8 @@ export interface LedgerEntry<PatchData> {
 }
 
 export interface LedgerOptions<StateData, PatchData> {
-  type: DataType<StateData, PatchData, unknown>;
-  /** Optional config forwarded to `type.applyPatch` / `type.diff`. */
+  type: DataType<StateData, PatchData, unknown, unknown>;
+  /** Optional config forwarded to `type.applyPatch` (on rollback). */
   config?: PatchConfig;
 }
 
@@ -23,36 +23,42 @@ export interface LedgerOptions<StateData, PatchData> {
 export type Checkpoint = number;
 
 /**
- * Wraps a state object in a live Proxy whose mutations are automatically
- * diffed against a {@link DataType}, committed as patches, and appended
- * to an inspectable history. Rollback applies the stored inverses in reverse.
- *
- * The mental model is exactly what IVO was reaching for, but expressed on
- * patchkit's typed patch algebra: you mutate the state like a normal object
- * and you get a running ledger of what changed, with every entry being a
- * real patch you could ship elsewhere.
+ * Coordinates a live mutable state with a replayable patch history. The
+ * shape of the mutable surface (`state`) comes from whichever `DataType`
+ * you pass in — `ObjectType` hands you a recursively-tracked Proxy,
+ * `ArrayType` an array Proxy, `SetType` a Set-like handle, `Source` a
+ * text edit API, `NumberType` a value handle, and so on. The Ledger
+ * itself only owns the cell, the history log, and rollback.
  *
  * ```ts
  * const app = ledger({ name: 'Andrew', role: 'eng' }, { type: objectType })
- * app.state.role = 'architect'   // committed
- * app.rollback()                 // reverts
- * app.history                    // full log
+ * app.state.role = 'architect'       // committed via ObjectType.track
+ * app.state.settings = { theme: 'dark' }
+ * app.state.settings.theme = 'light' // captured as a NESTED object patch
+ * app.rollback()                      // reverts last entry
+ * app.history                         // full log of patches + inverses
  * ```
- *
- * **Scope:** the Proxy is shallow. Nested mutations (`state.nested.x = 'y'`)
- * are not captured — reassign the subtree instead (`state.nested = {...}`).
  */
-export class Ledger<StateData extends object, PatchData = unknown> {
+export class Ledger<StateData, PatchData = unknown, TrackedSurface = StateData> {
   private _current: StateData;
   private readonly _history: LedgerEntry<PatchData>[] = [];
-  public readonly state: StateData;
+  private readonly _cell: StateCell<StateData>;
+  public readonly state: TrackedSurface;
 
   constructor(
     initial: StateData,
     private readonly opts: LedgerOptions<StateData, PatchData>,
   ) {
     this._current = initial;
-    this.state = this.makeProxy();
+    this._cell = {
+      get: () => this._current,
+      set: (s: StateData) => {
+        this._current = s;
+      },
+    };
+    this.state = opts.type.track(this._cell, (patch, inverse) => {
+      this._history.push({ patch, inverse, at: new Date() });
+    }) as TrackedSurface;
   }
 
   /** Readonly view of every committed mutation, oldest first. */
@@ -60,14 +66,15 @@ export class Ledger<StateData extends object, PatchData = unknown> {
     return this._history;
   }
 
-  /** Current state snapshot (plain object, not the proxy). */
+  /** Current state snapshot (raw, not the tracker surface). */
   get snapshot(): StateData {
     return this._current;
   }
 
   /**
-   * Undo the last `n` committed mutations. Returns the number actually
-   * undone (capped by history length).
+   * Undo the last `n` committed mutations by applying their stored
+   * inverses in reverse. Returns the number actually undone (capped by
+   * history length).
    */
   rollback(n: number = 1): number {
     let undone = 0;
@@ -107,51 +114,16 @@ export class Ledger<StateData extends object, PatchData = unknown> {
     if (toUndo <= 0) return 0;
     return this.rollback(toUndo);
   }
-
-  private commit(before: StateData, after: StateData): void {
-    const patch = this.opts.type.diff(before, after, this.opts.config);
-    const inverse = this.opts.type.diff(after, before, this.opts.config);
-    this._history.push({ patch, inverse, at: new Date() });
-  }
-
-  private makeProxy(): StateData {
-    const self = this;
-    return new Proxy({} as StateData, {
-      get(_, key) {
-        return (self._current as Record<string | symbol, unknown>)[key as string | symbol];
-      },
-      set(_, key, value) {
-        const before = self._current;
-        const after = { ...(before as object), [key]: value } as StateData;
-        self.commit(before, after);
-        self._current = after;
-        return true;
-      },
-      deleteProperty(_, key) {
-        const before = self._current;
-        if (!(key in (before as object))) return true;
-        const after = { ...(before as object) } as Record<string | symbol, unknown>;
-        delete after[key as string | symbol];
-        self.commit(before, after as StateData);
-        self._current = after as StateData;
-        return true;
-      },
-      has(_, key) {
-        return key in (self._current as object);
-      },
-      ownKeys() {
-        return Reflect.ownKeys(self._current as object);
-      },
-      getOwnPropertyDescriptor(_, key) {
-        return Reflect.getOwnPropertyDescriptor(self._current as object, key);
-      },
-    }) as StateData;
-  }
 }
 
-export function ledger<StateData extends object, PatchData = unknown>(
-  initial: StateData,
-  opts: LedgerOptions<StateData, PatchData>,
-): Ledger<StateData, PatchData> {
-  return new Ledger(initial, opts);
+/**
+ * Construct a Ledger. Type inference flows from `opts.type`'s `TrackedState`
+ * parameter to the returned `state` property — pass an `ObjectType` and you
+ * get a proxied state; pass a `NumberType` and you get a `NumberHandle`.
+ */
+export function ledger<S, P, T>(
+  initial: S,
+  opts: { type: DataType<S, P, unknown, T>; config?: PatchConfig },
+): Ledger<S, P, T> {
+  return new Ledger<S, P, T>(initial, opts);
 }

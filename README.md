@@ -101,7 +101,9 @@ any.applyPatch(objectPatch, { __type: "object:state" }); // delegates to ObjectT
 
 The `applyPatch` / `diff` API is pure and functional — you hand in state, you get state back. Sometimes what you actually want is a live object you can mutate the usual way, while the library quietly records what happened so you can inspect the history or undo it.
 
-`ledger()` wraps an object in a `Proxy` that turns every mutation into a committed patch on a running history. Rollback applies the stored inverses in reverse. The patch algebra comes from whichever `DataType` you pass in, so the same ledger shape works for Object, Array, Set, or Source state.
+`ledger()` pairs a `DataType` with a mutable state cell and hands you back a type-appropriate mutable surface. Every mutation on that surface commits a patch (plus its inverse) to an inspectable history. The *shape* of the mutable surface is type-driven: Object hands you a deep recursive Proxy, Array an array Proxy, Set a Set-like handle, Source a text-edit API, Number a value handle. The Ledger itself is just a coordinator — it owns the cell, the history, and rollback.
+
+### Object: deep nested mutation
 
 ```ts
 import { Typeset, ObjectType, ledger } from "patchkit";
@@ -109,47 +111,67 @@ import { Typeset, ObjectType, ledger } from "patchkit";
 const ts = new Typeset("app");
 const type = new ObjectType(ts);
 
-const app = ledger({ __type: "object:state", name: "Andrew", role: "eng" }, { type });
+const app = ledger(
+  { __type: "object:state", name: "Andrew", settings: { __type: "object:state", theme: "light" } },
+  { type },
+);
 
-// Mutate like a normal object — every change becomes a committed patch.
+// Flat mutation
 app.state.role = "architect";
-app.state.team = "infra";
-delete app.state.name;
 
-app.history.length;        // 3
-app.history[0].patch;      // { __type: 'object:patch', role: { command: 'SET', value: 'architect' } }
-app.history[0].inverse;    // { __type: 'object:patch', role: { command: 'SET', value: 'eng' } }
-app.history[0].at;         // Date
+// Nested mutation — captured as a properly nested ObjectPatch
+app.state.settings.theme = "dark";
+app.history[1].patch;
+// { __type: 'object:patch',
+//   settings: { __type: 'object:patch',
+//               theme: { command: 'SET', value: 'dark' } } }
 
-// Rollback applies inverses in reverse
-app.rollback();            // undo last
-app.rollback(2);           // undo last two
-app.state.name;            // 'Andrew' — restored
-
-// Checkpoint + restore for speculative branching
-const save = app.checkpoint();
-app.state.role = "ops";
-app.state.role = "pm";
-app.restore(save);         // rewind; history truncated to the checkpoint
-
-// Snapshot escapes the proxy (useful for JSON.stringify, serialization, etc.)
-app.snapshot;              // plain object, not the proxy
+app.rollback();                     // reverts the nested change
+app.state.settings.theme;           // 'light'
 ```
+
+### Array, Set, Source, Number
+
+Each type's `track()` exposes the mutating surface that makes sense for that data:
+
+```ts
+// ArrayType — array Proxy (push/pop/splice/index-set all intercepted)
+const list = ledger([1, 2, 3], { type: new ArrayType(ts) });
+list.state.push(4);
+list.state.splice(1, 1, 99);
+list.rollback(2);
+
+// SetType — Set-like handle
+const bag = ledger(new Set([1, 2]), { type: new SetType(ts) });
+bag.state.add(3);
+bag.state.delete(1);
+bag.state.clear();
+
+// Source — edit-submission API
+const text = ledger({ text: "hello" }, { type: new Source(ts) });
+text.state.insert(5, " world");
+text.state.replace(0, 5, "HELLO");
+
+// NumberType — value handle (can't Proxy a primitive)
+const counter = ledger(0, { type: new NumberType(ts) });
+counter.state.add(3);        // history entry: patch=3, inverse=-3
+counter.state.set(10);       // history entry: patch=7, inverse=-7
+counter.state.value;         // 10
+```
+
+All share the coordinator surface: `app.history`, `app.rollback(n)`, `app.checkpoint()`, `app.restore(handle)`, `app.reset()`, `app.snapshot`.
 
 ### What this gives you over manual `diff` / `applyPatch`
 
-- **Ergonomic mutation**: `obj.foo = 'bar'` instead of hand-rolled patch manifests.
-- **Correct inverses for free**: each entry stores both the forward patch and its inverse — computed via `type.diff(after, before)`, so rollback of *modifications* (not just adds/deletes) is covered. That's the structural hole in most hand-written "undo log" schemes.
-- **Inspectable, serializable entries**: each history entry is a real patchkit patch — replayable on any other state, shippable over the wire, renderable as an audit trail.
-- **Polymorphic**: pass any `DataType` implementation, not just Object. The same ledger shape wraps Array, Set, Source, or custom types.
-
-### Scope
-
-The proxy is **shallow**. Nested mutations like `state.nested.x = 'y'` are not captured — reassign the subtree (`state.nested = { ...state.nested, x: 'y' }`) so the outer `set` trap fires. A deep-proxy variant is a natural extension; it's not in v0.2.
+- **Ergonomic, type-appropriate mutation**: `obj.foo = 'bar'`, `arr.push(x)`, `set.add(y)`, `text.insert(at, chunk)` — whatever the type's native surface is.
+- **Correct inverses captured at mutation time**: each history entry stores both the forward patch and a pre-computed inverse, so rollback of *modifications* — not just adds/deletes — just works.
+- **Deep nesting for free on `ObjectType`**: the recursive Proxy turns `state.nested.x.y = z` into a properly nested `object:patch`. No reassign-the-subtree workaround.
+- **Inspectable, serializable entries**: each history entry is a real patchkit patch — replayable on any state, shippable over the wire, renderable as an audit trail.
+- **Polymorphic**: the Ledger shape is the same regardless of the underlying type.
 
 ## The `DataType` contract
 
-Every `DataType<StateData, PatchData, QueryData>` implements:
+Every `DataType<StateData, PatchData, QueryData, TrackedState>` implements:
 
 | Method          | Signature                                                 | Purpose                                         |
 | --------------- | --------------------------------------------------------- | ----------------------------------------------- |
@@ -161,6 +183,7 @@ Every `DataType<StateData, PatchData, QueryData>` implements:
 | `noncePatch`    | `(configs?) => patch`                                     | Identity patch (no-op)                          |
 | `nonceState`    | `(configs?) => state`                                     | Empty state                                     |
 | `fullQuery`     | `(configs?) => query`                                     | "Select everything" query                       |
+| `track`         | `(cell, onCommit, configs?) => trackedState`              | Return a type-appropriate mutable handle that emits patches on mutation |
 
 Contract laws enforced by the test suite:
 

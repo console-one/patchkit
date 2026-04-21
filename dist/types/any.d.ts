@@ -1,4 +1,4 @@
-import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult } from "../core.js";
+import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult, type OnCommit, type TrackConfig, type StateCell } from "../core.js";
 /**
  * Polymorphic dispatcher. Given a Typeset, AnyType recognizes an unknown
  * state/patch/query by asking each registered type in turn, then delegates.
@@ -30,5 +30,11 @@ export declare class AnyType extends DataType<unknown, unknown, unknown> {
     noncePatch(_configs?: FormatConfig): unknown;
     nonceState(_configs?: FormatConfig): unknown;
     fullQuery(_configs?: FormatConfig): unknown;
+    /**
+     * Delegate to whichever registered type recognizes the current state.
+     * The cell's state is re-probed on construction, so the first recognized
+     * member wins. Subsequent calls read/write through the delegated tracker.
+     */
+    track(cell: StateCell<unknown>, onCommit: OnCommit<unknown>, configs?: TrackConfig): unknown;
 }
 //# sourceMappingURL=any.d.ts.map

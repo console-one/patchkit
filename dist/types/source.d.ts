@@ -1,4 +1,16 @@
-import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult } from "../core.js";
+import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult, type OnCommit, type TrackConfig, type StateCell } from "../core.js";
+/**
+ * Mutable handle returned by {@link Source.track}. Text can't be proxied as
+ * a primitive, so we expose explicit edit operations (`insert`, `delete`,
+ * `replace`). Each call commits a `SourceUpdate` with the minimal change
+ * describing the edit and a matching inverse.
+ */
+export interface SourceHandle {
+    readonly text: string;
+    insert(at: number, chunk: string): void;
+    delete(from: number, to: number): void;
+    replace(from: number, to: number, chunk: string): void;
+}
 export declare const MUTATION: {
     readonly ADDITION: 0;
     readonly DELETION: 1;
@@ -35,7 +47,7 @@ export interface SourceQuery {
     end?: number;
     mutationType?: MutationKind;
 }
-export declare class Source extends DataType<SourceText, SourceUpdate, SourceQuery> {
+export declare class Source extends DataType<SourceText, SourceUpdate, SourceQuery, SourceHandle> {
     constructor(typeset: Typeset | TypesetAssignment, name?: string);
     applyPatch(patch: SourceUpdate, state: SourceText, _configs?: PatchConfig): {
         state: SourceText;
@@ -53,5 +65,11 @@ export declare class Source extends DataType<SourceText, SourceUpdate, SourceQue
     noncePatch(_configs?: FormatConfig): SourceUpdate;
     nonceState(_configs?: FormatConfig): SourceText;
     fullQuery(_configs?: FormatConfig): SourceQuery;
+    /**
+     * Returns a live text handle. Each `insert` / `delete` / `replace` commits
+     * a minimal SourceUpdate (one or two SourceChanges) plus its inverse so
+     * a coordinator can replay or roll back edits without re-diffing.
+     */
+    track(cell: StateCell<SourceText>, onCommit: OnCommit<SourceUpdate>, _configs?: TrackConfig): SourceHandle;
 }
 //# sourceMappingURL=source.d.ts.map

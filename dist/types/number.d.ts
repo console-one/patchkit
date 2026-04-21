@@ -1,4 +1,13 @@
-import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult } from "../core.js";
+import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult, type OnCommit, type TrackConfig, type StateCell } from "../core.js";
+/**
+ * Mutable handle surface a {@link NumberType} `track()` call returns. Can't
+ * Proxy a primitive directly, so instead we expose `set`/`add`/`value`.
+ */
+export interface NumberHandle {
+    readonly value: number;
+    set(n: number): void;
+    add(delta: number): void;
+}
 /**
  * A minimal `DataType` for numeric state where both the patch and the
  * diff are plain deltas. Illustrates the "additive group" version of
@@ -15,7 +24,7 @@ import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type
  * Useful on its own for counters, cursors, offsets, or as a building
  * block inside larger types that embed numeric subfields.
  */
-export declare class NumberType extends DataType<number, number, boolean> {
+export declare class NumberType extends DataType<number, number, boolean, NumberHandle> {
     constructor(typeset: Typeset | TypesetAssignment, name?: string);
     applyPatch(patch: number, state: number, _configs?: PatchConfig): {
         state: number;
@@ -33,5 +42,6 @@ export declare class NumberType extends DataType<number, number, boolean> {
     noncePatch(_configs?: FormatConfig): number;
     nonceState(_configs?: FormatConfig): number;
     fullQuery(_configs?: FormatConfig): boolean;
+    track(cell: StateCell<number>, onCommit: OnCommit<number>, _configs?: TrackConfig): NumberHandle;
 }
 //# sourceMappingURL=number.d.ts.map

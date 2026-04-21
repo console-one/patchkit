@@ -1,4 +1,4 @@
-import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult } from "../core.js";
+import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult, type OnCommit, type TrackConfig, type StateCell } from "../core.js";
 import { CaptureGroup, CaptureGroupSet } from "../capture.js";
 export declare const OBJECT_COMMAND: {
     readonly SET: "SET";
@@ -75,6 +75,14 @@ export declare class ObjectType extends DataType<ObjectState, ObjectPatch, Objec
     collate(patches: ObjectPatch[], configs?: CollateConfig | CollateStrategy): ObjectPatch;
     query(state: ObjectState, query: ObjectQuery, _configs?: QueryConfig): unknown;
     private contextFrom;
+    /**
+     * Returns a recursively-tracked Proxy over the cell's state. Property sets
+     * or deletes — at any nesting depth that is itself an ObjectState — are
+     * captured as properly-nested ObjectPatches (and inverses) and reported to
+     * `onCommit` after the cell is updated. Inner proxies resolve through a
+     * path re-read on each access, so parent reassignments don't strand them.
+     */
+    track(cell: StateCell<ObjectState>, onCommit: OnCommit<ObjectPatch>, _configs?: TrackConfig): ObjectState;
 }
 export declare class ObjectMutator {
     private readonly typeName;

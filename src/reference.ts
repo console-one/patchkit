@@ -18,6 +18,7 @@ function isNumericString(s: string): boolean {
   return NUMERIC.test(s);
 }
 
+
 export class Reference {
   readonly namespace: string;
   readonly version: ReferenceVersion;

@@ -9,6 +9,9 @@ import {
   type CollateConfig,
   type QueryConfig,
   type RecognizeResult,
+  type OnCommit,
+  type TrackConfig,
+  type StateCell,
 } from "../core.js";
 import { CaptureGroup, CaptureGroupSet } from "../capture.js";
 
@@ -347,6 +350,108 @@ export class ObjectType extends DataType<ObjectState, ObjectPatch, ObjectQuery> 
       }
     }
     return { captureGroups: new CaptureGroupSet() };
+  }
+
+  /**
+   * Returns a recursively-tracked Proxy over the cell's state. Property sets
+   * or deletes — at any nesting depth that is itself an ObjectState — are
+   * captured as properly-nested ObjectPatches (and inverses) and reported to
+   * `onCommit` after the cell is updated. Inner proxies resolve through a
+   * path re-read on each access, so parent reassignments don't strand them.
+   */
+  track(
+    cell: StateCell<ObjectState>,
+    onCommit: OnCommit<ObjectPatch>,
+    _configs?: TrackConfig,
+  ): ObjectState {
+    const self = this;
+    const typeTag = `${this.name}:patch`;
+
+    const wrapPatch = (path: string[], leaf: unknown): ObjectPatch => {
+      if (path.length === 0) {
+        throw new Error("ObjectType.track: cannot wrap a root-level patch");
+      }
+      const last = path[path.length - 1]!;
+      let node: Record<string, unknown> = { __type: typeTag, [last]: leaf };
+      for (let i = path.length - 2; i >= 0; i--) {
+        const seg = path[i]!;
+        node = { __type: typeTag, [seg]: node };
+      }
+      return node as ObjectPatch;
+    };
+
+    const readAt = (path: string[]): ObjectState => {
+      let node: unknown = cell.get();
+      for (const seg of path) {
+        node = (node as Record<string, unknown>)[seg];
+      }
+      return node as ObjectState;
+    };
+
+    const commitSetAtPath = (path: string[], key: string, value: unknown): void => {
+      const parent = readAt(path);
+      const had = key in parent;
+      const prior = (parent as Record<string, unknown>)[key];
+
+      const setLeaf = { command: OBJECT_COMMAND.SET, value };
+      const inverseLeaf = had
+        ? { command: OBJECT_COMMAND.SET, value: prior }
+        : { command: OBJECT_COMMAND.DELETE };
+
+      const patch = wrapPatch([...path, key], setLeaf);
+      const inverse = wrapPatch([...path, key], inverseLeaf);
+
+      cell.set(self.applyPatch(patch, cell.get()).state);
+      onCommit(patch, inverse);
+    };
+
+    const commitDeleteAtPath = (path: string[], key: string): void => {
+      const parent = readAt(path);
+      if (!(key in parent)) return;
+      const prior = (parent as Record<string, unknown>)[key];
+
+      const patch = wrapPatch([...path, key], { command: OBJECT_COMMAND.DELETE });
+      const inverse = wrapPatch([...path, key], { command: OBJECT_COMMAND.SET, value: prior });
+
+      cell.set(self.applyPatch(patch, cell.get()).state);
+      onCommit(patch, inverse);
+    };
+
+    const proxyAt = (path: string[]): ObjectState => {
+      return new Proxy({} as ObjectState, {
+        get(_target, key) {
+          if (typeof key !== "string") {
+            return (readAt(path) as Record<string | symbol, unknown>)[key as symbol];
+          }
+          const v = (readAt(path) as Record<string, unknown>)[key];
+          if (self.isState(v)) {
+            return proxyAt([...path, key]);
+          }
+          return v;
+        },
+        set(_target, key, value) {
+          if (typeof key !== "string") return false;
+          commitSetAtPath(path, key, value);
+          return true;
+        },
+        deleteProperty(_target, key) {
+          if (typeof key !== "string") return true;
+          commitDeleteAtPath(path, key);
+          return true;
+        },
+        has(_target, key) {
+          return key in (readAt(path) as object);
+        },
+        ownKeys() {
+          return Reflect.ownKeys(readAt(path) as object);
+        },
+        getOwnPropertyDescriptor(_target, key) {
+          return Reflect.getOwnPropertyDescriptor(readAt(path) as object, key);
+        },
+      }) as ObjectState;
+    };
+
+    return proxyAt([]);
   }
 }
 

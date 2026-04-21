@@ -10,7 +10,23 @@ import {
   type CollateConfig,
   type QueryConfig,
   type RecognizeResult,
+  type OnCommit,
+  type TrackConfig,
+  type StateCell,
 } from "../core.js";
+
+/**
+ * Mutable handle returned by {@link Source.track}. Text can't be proxied as
+ * a primitive, so we expose explicit edit operations (`insert`, `delete`,
+ * `replace`). Each call commits a `SourceUpdate` with the minimal change
+ * describing the edit and a matching inverse.
+ */
+export interface SourceHandle {
+  readonly text: string;
+  insert(at: number, chunk: string): void;
+  delete(from: number, to: number): void;
+  replace(from: number, to: number, chunk: string): void;
+}
 
 export const MUTATION = {
   ADDITION: 0,
@@ -236,7 +252,7 @@ export interface SourceQuery {
   mutationType?: MutationKind;
 }
 
-export class Source extends DataType<SourceText, SourceUpdate, SourceQuery> {
+export class Source extends DataType<SourceText, SourceUpdate, SourceQuery, SourceHandle> {
   constructor(typeset: Typeset | TypesetAssignment, name = "file") {
     super(name, typeset);
   }
@@ -358,5 +374,67 @@ export class Source extends DataType<SourceText, SourceUpdate, SourceQuery> {
 
   fullQuery(_configs?: FormatConfig): SourceQuery {
     return { type: "byIndex", start: 0 };
+  }
+
+  /**
+   * Returns a live text handle. Each `insert` / `delete` / `replace` commits
+   * a minimal SourceUpdate (one or two SourceChanges) plus its inverse so
+   * a coordinator can replay or roll back edits without re-diffing.
+   */
+  track(
+    cell: StateCell<SourceText>,
+    onCommit: OnCommit<SourceUpdate>,
+    _configs?: TrackConfig,
+  ): SourceHandle {
+    const self = this;
+
+    const commit = (forward: SourceChange[], inverse: SourceChange[]): void => {
+      if (forward.length === 0) return;
+      const fwdPatch = new SourceUpdate(forward);
+      const invPatch = new SourceUpdate(inverse);
+      cell.set(self.applyPatch(fwdPatch, cell.get()).state);
+      onCommit(fwdPatch, invPatch);
+    };
+
+    return {
+      get text() {
+        return cell.get().text;
+      },
+      insert(at: number, chunk: string) {
+        if (chunk.length === 0) return;
+        const now = Date.now();
+        commit(
+          [{ index: at, change: chunk, type: MUTATION.ADDITION, timestamp: now, length: chunk.length }],
+          [{ index: at, change: chunk, type: MUTATION.DELETION, timestamp: now, length: chunk.length }],
+        );
+      },
+      delete(from: number, to: number) {
+        if (to <= from) return;
+        const current = cell.get().text;
+        const removed = current.slice(from, to);
+        if (removed.length === 0) return;
+        const now = Date.now();
+        commit(
+          [{ index: from, change: removed, type: MUTATION.DELETION, timestamp: now, length: removed.length }],
+          [{ index: from, change: removed, type: MUTATION.ADDITION, timestamp: now, length: removed.length }],
+        );
+      },
+      replace(from: number, to: number, chunk: string) {
+        const current = cell.get().text;
+        const removed = to > from ? current.slice(from, to) : "";
+        const now = Date.now();
+        const forward: SourceChange[] = [];
+        const inverse: SourceChange[] = [];
+        if (removed.length > 0) {
+          forward.push({ index: from, change: removed, type: MUTATION.DELETION, timestamp: now, length: removed.length });
+          inverse.push({ index: from, change: removed, type: MUTATION.ADDITION, timestamp: now, length: removed.length });
+        }
+        if (chunk.length > 0) {
+          forward.push({ index: from, change: chunk, type: MUTATION.ADDITION, timestamp: now, length: chunk.length });
+          inverse.push({ index: from, change: chunk, type: MUTATION.DELETION, timestamp: now, length: chunk.length });
+        }
+        commit(forward, inverse);
+      },
+    };
   }
 }

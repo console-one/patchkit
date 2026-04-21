@@ -292,6 +292,95 @@ export class ObjectType extends DataType {
         }
         return { captureGroups: new CaptureGroupSet() };
     }
+    /**
+     * Returns a recursively-tracked Proxy over the cell's state. Property sets
+     * or deletes — at any nesting depth that is itself an ObjectState — are
+     * captured as properly-nested ObjectPatches (and inverses) and reported to
+     * `onCommit` after the cell is updated. Inner proxies resolve through a
+     * path re-read on each access, so parent reassignments don't strand them.
+     */
+    track(cell, onCommit, _configs) {
+        const self = this;
+        const typeTag = `${this.name}:patch`;
+        const wrapPatch = (path, leaf) => {
+            if (path.length === 0) {
+                throw new Error("ObjectType.track: cannot wrap a root-level patch");
+            }
+            const last = path[path.length - 1];
+            let node = { __type: typeTag, [last]: leaf };
+            for (let i = path.length - 2; i >= 0; i--) {
+                const seg = path[i];
+                node = { __type: typeTag, [seg]: node };
+            }
+            return node;
+        };
+        const readAt = (path) => {
+            let node = cell.get();
+            for (const seg of path) {
+                node = node[seg];
+            }
+            return node;
+        };
+        const commitSetAtPath = (path, key, value) => {
+            const parent = readAt(path);
+            const had = key in parent;
+            const prior = parent[key];
+            const setLeaf = { command: OBJECT_COMMAND.SET, value };
+            const inverseLeaf = had
+                ? { command: OBJECT_COMMAND.SET, value: prior }
+                : { command: OBJECT_COMMAND.DELETE };
+            const patch = wrapPatch([...path, key], setLeaf);
+            const inverse = wrapPatch([...path, key], inverseLeaf);
+            cell.set(self.applyPatch(patch, cell.get()).state);
+            onCommit(patch, inverse);
+        };
+        const commitDeleteAtPath = (path, key) => {
+            const parent = readAt(path);
+            if (!(key in parent))
+                return;
+            const prior = parent[key];
+            const patch = wrapPatch([...path, key], { command: OBJECT_COMMAND.DELETE });
+            const inverse = wrapPatch([...path, key], { command: OBJECT_COMMAND.SET, value: prior });
+            cell.set(self.applyPatch(patch, cell.get()).state);
+            onCommit(patch, inverse);
+        };
+        const proxyAt = (path) => {
+            return new Proxy({}, {
+                get(_target, key) {
+                    if (typeof key !== "string") {
+                        return readAt(path)[key];
+                    }
+                    const v = readAt(path)[key];
+                    if (self.isState(v)) {
+                        return proxyAt([...path, key]);
+                    }
+                    return v;
+                },
+                set(_target, key, value) {
+                    if (typeof key !== "string")
+                        return false;
+                    commitSetAtPath(path, key, value);
+                    return true;
+                },
+                deleteProperty(_target, key) {
+                    if (typeof key !== "string")
+                        return true;
+                    commitDeleteAtPath(path, key);
+                    return true;
+                },
+                has(_target, key) {
+                    return key in readAt(path);
+                },
+                ownKeys() {
+                    return Reflect.ownKeys(readAt(path));
+                },
+                getOwnPropertyDescriptor(_target, key) {
+                    return Reflect.getOwnPropertyDescriptor(readAt(path), key);
+                },
+            });
+        };
+        return proxyAt([]);
+    }
 }
 export class ObjectMutator {
     typeName;

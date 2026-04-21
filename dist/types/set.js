@@ -151,6 +151,58 @@ export class SetType extends DataType {
         }
         return [...state];
     }
+    /**
+     * Returns a handle that intercepts `add` / `delete` / `clear` and emits a
+     * SetPatch for each mutation. Reads (`has`, `size`, iteration) pass
+     * through to the current cell state.
+     */
+    track(cell, onCommit, _configs) {
+        const self = this;
+        const typeTag = `${this.name}:patch`;
+        const mkPatch = (ops) => ({ __type: typeTag, ops });
+        const commit = (forward, inverse) => {
+            if (forward.length === 0)
+                return;
+            cell.set(self.applyPatch(mkPatch(forward), cell.get()).state);
+            onCommit(mkPatch(forward), mkPatch(inverse));
+        };
+        const handle = {
+            add(item) {
+                const current = cell.get();
+                if (current.has(item))
+                    return handle;
+                commit([{ kind: SET_OP.ADD, items: [item] }], [{ kind: SET_OP.REMOVE, items: [item] }]);
+                return handle;
+            },
+            delete(item) {
+                const current = cell.get();
+                if (!current.has(item))
+                    return false;
+                commit([{ kind: SET_OP.REMOVE, items: [item] }], [{ kind: SET_OP.ADD, items: [item] }]);
+                return true;
+            },
+            clear() {
+                const current = cell.get();
+                if (current.size === 0)
+                    return;
+                const items = [...current];
+                commit([{ kind: SET_OP.REMOVE, items }], [{ kind: SET_OP.ADD, items }]);
+            },
+            has(item) {
+                return cell.get().has(item);
+            },
+            get size() {
+                return cell.get().size;
+            },
+            values() {
+                return cell.get().values();
+            },
+            [Symbol.iterator]() {
+                return cell.get()[Symbol.iterator]();
+            },
+        };
+        return handle;
+    }
 }
 export class SetPatchBuilder {
     name;

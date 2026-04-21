@@ -9,7 +9,20 @@ import {
   type CollateConfig,
   type QueryConfig,
   type RecognizeResult,
+  type OnCommit,
+  type TrackConfig,
+  type StateCell,
 } from "../core.js";
+
+/**
+ * Mutable handle surface a {@link NumberType} `track()` call returns. Can't
+ * Proxy a primitive directly, so instead we expose `set`/`add`/`value`.
+ */
+export interface NumberHandle {
+  readonly value: number;
+  set(n: number): void;
+  add(delta: number): void;
+}
 
 /**
  * A minimal `DataType` for numeric state where both the patch and the
@@ -27,7 +40,7 @@ import {
  * Useful on its own for counters, cursors, offsets, or as a building
  * block inside larger types that embed numeric subfields.
  */
-export class NumberType extends DataType<number, number, boolean> {
+export class NumberType extends DataType<number, number, boolean, NumberHandle> {
   constructor(typeset: Typeset | TypesetAssignment, name: string = "number") {
     super(name, typeset);
   }
@@ -93,5 +106,31 @@ export class NumberType extends DataType<number, number, boolean> {
 
   fullQuery(_configs?: FormatConfig): boolean {
     return true;
+  }
+
+  track(
+    cell: StateCell<number>,
+    onCommit: OnCommit<number>,
+    _configs?: TrackConfig,
+  ): NumberHandle {
+    const self = this;
+    return {
+      get value() {
+        return cell.get();
+      },
+      set(n: number) {
+        const before = cell.get();
+        const patch = n - before;
+        if (patch === 0) return;
+        cell.set(self.applyPatch(patch, before).state);
+        onCommit(patch, -patch);
+      },
+      add(delta: number) {
+        if (delta === 0) return;
+        const before = cell.get();
+        cell.set(self.applyPatch(delta, before).state);
+        onCommit(delta, -delta);
+      },
+    };
   }
 }

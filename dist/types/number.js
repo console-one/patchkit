@@ -68,5 +68,28 @@ export class NumberType extends DataType {
     fullQuery(_configs) {
         return true;
     }
+    track(cell, onCommit, _configs) {
+        const self = this;
+        return {
+            get value() {
+                return cell.get();
+            },
+            set(n) {
+                const before = cell.get();
+                const patch = n - before;
+                if (patch === 0)
+                    return;
+                cell.set(self.applyPatch(patch, before).state);
+                onCommit(patch, -patch);
+            },
+            add(delta) {
+                if (delta === 0)
+                    return;
+                const before = cell.get();
+                cell.set(self.applyPatch(delta, before).state);
+                onCommit(delta, -delta);
+            },
+        };
+    }
 }
 //# sourceMappingURL=number.js.map

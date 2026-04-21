@@ -9,6 +9,9 @@ import {
   type CollateConfig,
   type QueryConfig,
   type RecognizeResult,
+  type OnCommit,
+  type TrackConfig,
+  type StateCell,
 } from "../core.js";
 
 export const ARRAY_OP = {
@@ -261,6 +264,174 @@ export class ArrayType extends DataType<ArrayState, ArrayPatch, ArrayQuery> {
   query(state: ArrayState, query: ArrayQuery, _configs?: QueryConfig): unknown {
     if (query && typeof query.at === "number") return state[query.at];
     return state;
+  }
+
+  /**
+   * Returns a Proxy over an array-shaped view of the cell. Mutations through
+   * any of the following paths are captured as an ArrayPatch:
+   *
+   *   - index assignment (`arr[i] = v`)  → SET
+   *   - `arr.length = n` (truncation)    → REMOVE
+   *   - `arr.push(...items)`             → INSERT at end
+   *   - `arr.pop()`                      → REMOVE from end
+   *   - `arr.shift()`                    → REMOVE from head
+   *   - `arr.unshift(...items)`          → INSERT at head
+   *   - `arr.splice(at, del, ...items)`  → INSERT/REMOVE composed
+   *
+   * `onCommit` receives a patch with exactly the ops that were performed
+   * plus its inverse (computed from the state before the mutation).
+   */
+  track(
+    cell: StateCell<ArrayState>,
+    onCommit: OnCommit<ArrayPatch>,
+    _configs?: TrackConfig,
+  ): ArrayState {
+    const self = this;
+    const typeTag = `${this.name}:patch`;
+
+    const mkPatch = (ops: ArrayOp[]): ArrayPatch => ({ __type: typeTag, ops });
+
+    const invertOps = (ops: ArrayOp[], before: ArrayState): ArrayOp[] => {
+      // Apply each op in sequence against a working copy, and build an inverse.
+      // Because the forward patch is constructed from ONE shallow mutation at
+      // a time (set, splice, etc.), the ops list is short and the inverse is
+      // straightforward.
+      const inverse: ArrayOp[] = [];
+      const working = [...before];
+      for (const op of ops) {
+        if (op.kind === ARRAY_OP.INSERT) {
+          const count = op.items?.length ?? 0;
+          inverse.push({ kind: ARRAY_OP.REMOVE, index: op.index, howMany: count });
+          working.splice(op.index, 0, ...(op.items ?? []));
+        } else if (op.kind === ARRAY_OP.REMOVE) {
+          const count = op.howMany ?? 1;
+          const removed = working.slice(op.index, op.index + count);
+          inverse.push({ kind: ARRAY_OP.INSERT, index: op.index, items: removed });
+          working.splice(op.index, count);
+        } else if (op.kind === ARRAY_OP.SET) {
+          const items = op.items ?? [];
+          const prior = working.slice(op.index, op.index + items.length);
+          inverse.push({ kind: ARRAY_OP.SET, index: op.index, items: prior });
+          for (let i = 0; i < items.length; i++) {
+            working[op.index + i] = items[i];
+          }
+        }
+      }
+      inverse.reverse();
+      return inverse;
+    };
+
+    const commit = (ops: ArrayOp[]): void => {
+      if (ops.length === 0) return;
+      const before = cell.get();
+      const patch = mkPatch(ops);
+      const inverse = mkPatch(invertOps(ops, before));
+      cell.set(self.applyPatch(patch, before).state);
+      onCommit(patch, inverse);
+    };
+
+    const indexKey = (key: string | symbol): number | null => {
+      if (typeof key !== "string") return null;
+      if (!/^\d+$/.test(key)) return null;
+      return Number(key);
+    };
+
+    const mutatingMethods: Record<string, (...args: unknown[]) => unknown> = {
+      push: (...items: unknown[]) => {
+        const current = cell.get();
+        commit([{ kind: ARRAY_OP.INSERT, index: current.length, items }]);
+        return cell.get().length;
+      },
+      pop: () => {
+        const current = cell.get();
+        if (current.length === 0) return undefined;
+        const last = current[current.length - 1];
+        commit([{ kind: ARRAY_OP.REMOVE, index: current.length - 1, howMany: 1 }]);
+        return last;
+      },
+      shift: () => {
+        const current = cell.get();
+        if (current.length === 0) return undefined;
+        const head = current[0];
+        commit([{ kind: ARRAY_OP.REMOVE, index: 0, howMany: 1 }]);
+        return head;
+      },
+      unshift: (...items: unknown[]) => {
+        commit([{ kind: ARRAY_OP.INSERT, index: 0, items }]);
+        return cell.get().length;
+      },
+      splice: (...args: unknown[]) => {
+        const start = args[0] as number;
+        const deleteCount = args[1] as number | undefined;
+        const items = args.slice(2);
+        const current = cell.get();
+        const len = current.length;
+        const s = start < 0 ? Math.max(len + start, 0) : Math.min(start, len);
+        const d = deleteCount === undefined ? len - s : Math.max(0, Math.min(deleteCount, len - s));
+        const removed = current.slice(s, s + d);
+        const ops: ArrayOp[] = [];
+        if (d > 0) ops.push({ kind: ARRAY_OP.REMOVE, index: s, howMany: d });
+        if (items.length > 0) ops.push({ kind: ARRAY_OP.INSERT, index: s, items });
+        commit(ops);
+        return removed;
+      },
+    };
+
+    return new Proxy([] as ArrayState, {
+      get(_target, key, receiver) {
+        if (typeof key === "string" && key in mutatingMethods) {
+          return mutatingMethods[key];
+        }
+        const current = cell.get();
+        return Reflect.get(current, key, receiver);
+      },
+      set(_target, key, value) {
+        if (key === "length") {
+          if (typeof value !== "number") return false;
+          const current = cell.get();
+          if (value < current.length) {
+            commit([{ kind: ARRAY_OP.REMOVE, index: value, howMany: current.length - value }]);
+          } else if (value > current.length) {
+            const padding = new Array(value - current.length).fill(undefined);
+            commit([{ kind: ARRAY_OP.INSERT, index: current.length, items: padding }]);
+          }
+          return true;
+        }
+        const idx = indexKey(key);
+        if (idx === null) return false;
+        const current = cell.get();
+        if (idx < current.length) {
+          commit([{ kind: ARRAY_OP.SET, index: idx, items: [value] }]);
+        } else if (idx === current.length) {
+          commit([{ kind: ARRAY_OP.INSERT, index: idx, items: [value] }]);
+        } else {
+          // sparse assignment; pad with undefineds then set
+          const padding = new Array(idx - current.length).fill(undefined);
+          commit([
+            { kind: ARRAY_OP.INSERT, index: current.length, items: [...padding, value] },
+          ]);
+        }
+        return true;
+      },
+      deleteProperty(_target, key) {
+        const idx = indexKey(key);
+        if (idx === null) return true;
+        const current = cell.get();
+        if (idx < 0 || idx >= current.length) return true;
+        // deleting an index in JS leaves a hole — model as SET to undefined
+        commit([{ kind: ARRAY_OP.SET, index: idx, items: [undefined] }]);
+        return true;
+      },
+      has(_target, key) {
+        return Reflect.has(cell.get(), key);
+      },
+      ownKeys() {
+        return Reflect.ownKeys(cell.get());
+      },
+      getOwnPropertyDescriptor(_target, key) {
+        return Reflect.getOwnPropertyDescriptor(cell.get(), key);
+      },
+    });
   }
 }
 

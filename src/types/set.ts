@@ -9,7 +9,25 @@ import {
   type CollateConfig,
   type QueryConfig,
   type RecognizeResult,
+  type OnCommit,
+  type TrackConfig,
+  type StateCell,
 } from "../core.js";
+
+/**
+ * Mutable handle returned by {@link SetType.track}. Mirrors the core mutating
+ * surface of a JS `Set` — `add`, `delete`, `clear`, plus read-through of
+ * `has`, `size`, and iteration. Every mutation lands as a `SetPatch`.
+ */
+export interface SetHandle<T = unknown> {
+  add(item: T): this;
+  delete(item: T): boolean;
+  clear(): void;
+  has(item: T): boolean;
+  readonly size: number;
+  values(): IterableIterator<T>;
+  [Symbol.iterator](): IterableIterator<T>;
+}
 
 export const SET_OP = {
   ADD: "add",
@@ -36,7 +54,7 @@ export interface SetQuery {
 
 export type SetState = Set<unknown>;
 
-export class SetType extends DataType<SetState, SetPatch, SetQuery> {
+export class SetType extends DataType<SetState, SetPatch, SetQuery, SetHandle> {
   patchLimit = 5;
 
   constructor(typeset: Typeset | TypesetAssignment, name = "set") {
@@ -183,6 +201,70 @@ export class SetType extends DataType<SetState, SetPatch, SetQuery> {
       return state.has(query.has);
     }
     return [...state];
+  }
+
+  /**
+   * Returns a handle that intercepts `add` / `delete` / `clear` and emits a
+   * SetPatch for each mutation. Reads (`has`, `size`, iteration) pass
+   * through to the current cell state.
+   */
+  track(
+    cell: StateCell<SetState>,
+    onCommit: OnCommit<SetPatch>,
+    _configs?: TrackConfig,
+  ): SetHandle {
+    const self = this;
+    const typeTag = `${this.name}:patch`;
+    const mkPatch = (ops: SetOp[]): SetPatch => ({ __type: typeTag, ops });
+
+    const commit = (forward: SetOp[], inverse: SetOp[]): void => {
+      if (forward.length === 0) return;
+      cell.set(self.applyPatch(mkPatch(forward), cell.get()).state);
+      onCommit(mkPatch(forward), mkPatch(inverse));
+    };
+
+    const handle: SetHandle = {
+      add(item: unknown) {
+        const current = cell.get();
+        if (current.has(item)) return handle;
+        commit(
+          [{ kind: SET_OP.ADD, items: [item] }],
+          [{ kind: SET_OP.REMOVE, items: [item] }],
+        );
+        return handle;
+      },
+      delete(item: unknown) {
+        const current = cell.get();
+        if (!current.has(item)) return false;
+        commit(
+          [{ kind: SET_OP.REMOVE, items: [item] }],
+          [{ kind: SET_OP.ADD, items: [item] }],
+        );
+        return true;
+      },
+      clear() {
+        const current = cell.get();
+        if (current.size === 0) return;
+        const items = [...current];
+        commit(
+          [{ kind: SET_OP.REMOVE, items }],
+          [{ kind: SET_OP.ADD, items }],
+        );
+      },
+      has(item: unknown) {
+        return cell.get().has(item);
+      },
+      get size() {
+        return cell.get().size;
+      },
+      values() {
+        return cell.get().values();
+      },
+      [Symbol.iterator]() {
+        return cell.get()[Symbol.iterator]();
+      },
+    };
+    return handle;
   }
 }
 

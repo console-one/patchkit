@@ -1,44 +1,51 @@
 /**
- * Wraps a state object in a live Proxy whose mutations are automatically
- * diffed against a {@link DataType}, committed as patches, and appended
- * to an inspectable history. Rollback applies the stored inverses in reverse.
- *
- * The mental model is exactly what IVO was reaching for, but expressed on
- * patchkit's typed patch algebra: you mutate the state like a normal object
- * and you get a running ledger of what changed, with every entry being a
- * real patch you could ship elsewhere.
+ * Coordinates a live mutable state with a replayable patch history. The
+ * shape of the mutable surface (`state`) comes from whichever `DataType`
+ * you pass in — `ObjectType` hands you a recursively-tracked Proxy,
+ * `ArrayType` an array Proxy, `SetType` a Set-like handle, `Source` a
+ * text edit API, `NumberType` a value handle, and so on. The Ledger
+ * itself only owns the cell, the history log, and rollback.
  *
  * ```ts
  * const app = ledger({ name: 'Andrew', role: 'eng' }, { type: objectType })
- * app.state.role = 'architect'   // committed
- * app.rollback()                 // reverts
- * app.history                    // full log
+ * app.state.role = 'architect'       // committed via ObjectType.track
+ * app.state.settings = { theme: 'dark' }
+ * app.state.settings.theme = 'light' // captured as a NESTED object patch
+ * app.rollback()                      // reverts last entry
+ * app.history                         // full log of patches + inverses
  * ```
- *
- * **Scope:** the Proxy is shallow. Nested mutations (`state.nested.x = 'y'`)
- * are not captured — reassign the subtree instead (`state.nested = {...}`).
  */
 export class Ledger {
     opts;
     _current;
     _history = [];
+    _cell;
     state;
     constructor(initial, opts) {
         this.opts = opts;
         this._current = initial;
-        this.state = this.makeProxy();
+        this._cell = {
+            get: () => this._current,
+            set: (s) => {
+                this._current = s;
+            },
+        };
+        this.state = opts.type.track(this._cell, (patch, inverse) => {
+            this._history.push({ patch, inverse, at: new Date() });
+        });
     }
     /** Readonly view of every committed mutation, oldest first. */
     get history() {
         return this._history;
     }
-    /** Current state snapshot (plain object, not the proxy). */
+    /** Current state snapshot (raw, not the tracker surface). */
     get snapshot() {
         return this._current;
     }
     /**
-     * Undo the last `n` committed mutations. Returns the number actually
-     * undone (capped by history length).
+     * Undo the last `n` committed mutations by applying their stored
+     * inverses in reverse. Returns the number actually undone (capped by
+     * history length).
      */
     rollback(n = 1) {
         let undone = 0;
@@ -73,46 +80,12 @@ export class Ledger {
             return 0;
         return this.rollback(toUndo);
     }
-    commit(before, after) {
-        const patch = this.opts.type.diff(before, after, this.opts.config);
-        const inverse = this.opts.type.diff(after, before, this.opts.config);
-        this._history.push({ patch, inverse, at: new Date() });
-    }
-    makeProxy() {
-        const self = this;
-        return new Proxy({}, {
-            get(_, key) {
-                return self._current[key];
-            },
-            set(_, key, value) {
-                const before = self._current;
-                const after = { ...before, [key]: value };
-                self.commit(before, after);
-                self._current = after;
-                return true;
-            },
-            deleteProperty(_, key) {
-                const before = self._current;
-                if (!(key in before))
-                    return true;
-                const after = { ...before };
-                delete after[key];
-                self.commit(before, after);
-                self._current = after;
-                return true;
-            },
-            has(_, key) {
-                return key in self._current;
-            },
-            ownKeys() {
-                return Reflect.ownKeys(self._current);
-            },
-            getOwnPropertyDescriptor(_, key) {
-                return Reflect.getOwnPropertyDescriptor(self._current, key);
-            },
-        });
-    }
 }
+/**
+ * Construct a Ledger. Type inference flows from `opts.type`'s `TrackedState`
+ * parameter to the returned `state` property — pass an `ObjectType` and you
+ * get a proxied state; pass a `NumberType` and you get a `NumberHandle`.
+ */
 export function ledger(initial, opts) {
     return new Ledger(initial, opts);
 }

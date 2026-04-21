@@ -9,6 +9,9 @@ import {
   type CollateConfig,
   type QueryConfig,
   type RecognizeResult,
+  type OnCommit,
+  type TrackConfig,
+  type StateCell,
 } from "../core.js";
 
 /**
@@ -118,5 +121,26 @@ export class AnyType extends DataType<unknown, unknown, unknown> {
 
   fullQuery(_configs?: FormatConfig): unknown {
     return undefined;
+  }
+
+  /**
+   * Delegate to whichever registered type recognizes the current state.
+   * The cell's state is re-probed on construction, so the first recognized
+   * member wins. Subsequent calls read/write through the delegated tracker.
+   */
+  track(
+    cell: StateCell<unknown>,
+    onCommit: OnCommit<unknown>,
+    configs?: TrackConfig,
+  ): unknown {
+    const t = this.dispatch(cell.get(), "state");
+    if (t === undefined) {
+      throw new Error("AnyType.track: state not recognized by any registered type");
+    }
+    return (t.track as (
+      c: StateCell<unknown>,
+      cb: OnCommit<unknown>,
+      cfg?: TrackConfig,
+    ) => unknown)(cell, onCommit, configs);
   }
 }

@@ -1,4 +1,18 @@
-import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult } from "../core.js";
+import { DataType, type Typeset, type TypesetAssignment, type FormatConfig, type ConvertConfig, type PatchConfig, type DiffConfig, type CollateConfig, type QueryConfig, type RecognizeResult, type OnCommit, type TrackConfig, type StateCell } from "../core.js";
+/**
+ * Mutable handle returned by {@link SetType.track}. Mirrors the core mutating
+ * surface of a JS `Set` — `add`, `delete`, `clear`, plus read-through of
+ * `has`, `size`, and iteration. Every mutation lands as a `SetPatch`.
+ */
+export interface SetHandle<T = unknown> {
+    add(item: T): this;
+    delete(item: T): boolean;
+    clear(): void;
+    has(item: T): boolean;
+    readonly size: number;
+    values(): IterableIterator<T>;
+    [Symbol.iterator](): IterableIterator<T>;
+}
 export declare const SET_OP: {
     readonly ADD: "add";
     readonly REMOVE: "remove";
@@ -18,7 +32,7 @@ export interface SetQuery {
     has?: unknown;
 }
 export type SetState = Set<unknown>;
-export declare class SetType extends DataType<SetState, SetPatch, SetQuery> {
+export declare class SetType extends DataType<SetState, SetPatch, SetQuery, SetHandle> {
     patchLimit: number;
     constructor(typeset: Typeset | TypesetAssignment, name?: string);
     recognize(item: unknown, _configs?: FormatConfig): RecognizeResult;
@@ -37,6 +51,12 @@ export declare class SetType extends DataType<SetState, SetPatch, SetQuery> {
     diff(before: SetState, after: SetState, _configs?: DiffConfig): SetPatch;
     collate(patches: SetPatch[], _configs?: CollateConfig): SetPatch;
     query(state: SetState, query: SetQuery, _configs?: QueryConfig): unknown;
+    /**
+     * Returns a handle that intercepts `add` / `delete` / `clear` and emits a
+     * SetPatch for each mutation. Reads (`has`, `size`, iteration) pass
+     * through to the current cell state.
+     */
+    track(cell: StateCell<SetState>, onCommit: OnCommit<SetPatch>, _configs?: TrackConfig): SetHandle;
 }
 export declare class SetPatchBuilder {
     private readonly name;
