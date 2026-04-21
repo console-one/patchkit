@@ -23,6 +23,22 @@ export interface LedgerOptions<StateData, PatchData> {
 export type Checkpoint = number;
 
 /**
+ * A downstream observer of Ledger commits. Called once per entry, in the
+ * order entries are committed. The Ledger does not await or serialize
+ * `onEntry` — returning a Promise is legal (for async persistence, network
+ * replication, etc.) but the Ledger's own state advances synchronously
+ * regardless. If you need backpressure, ordered persistence, retry-on-
+ * failure, or reload reconciliation, wire those up in a Sink wrapper —
+ * the Ledger intentionally stays honest about being an in-memory log.
+ */
+export interface Sink<PatchData> {
+  onEntry(entry: LedgerEntry<PatchData>): void | Promise<void>;
+}
+
+/** Handle returned by {@link Ledger.subscribe} to detach a sink. */
+export type Unsubscribe = () => void;
+
+/**
  * Coordinates a live mutable state with a replayable patch history. The
  * shape of the mutable surface (`state`) comes from whichever `DataType`
  * you pass in — `ObjectType` hands you a recursively-tracked Proxy,
@@ -43,6 +59,7 @@ export class Ledger<StateData, PatchData = unknown, TrackedSurface = StateData> 
   private _current: StateData;
   private readonly _history: LedgerEntry<PatchData>[] = [];
   private readonly _cell: StateCell<StateData>;
+  private readonly _sinks: Set<Sink<PatchData>> = new Set();
   public readonly state: TrackedSurface;
 
   constructor(
@@ -57,8 +74,32 @@ export class Ledger<StateData, PatchData = unknown, TrackedSurface = StateData> 
       },
     };
     this.state = opts.type.track(this._cell, (patch, inverse) => {
-      this._history.push({ patch, inverse, at: new Date() });
+      const entry: LedgerEntry<PatchData> = { patch, inverse, at: new Date() };
+      this._history.push(entry);
+      for (const sink of this._sinks) {
+        // Deliberately not awaited. Sinks that care about ordering or
+        // backpressure should wrap themselves; the Ledger stays sync.
+        void sink.onEntry(entry);
+      }
     }) as TrackedSurface;
+  }
+
+  /**
+   * Attach a downstream observer. Called once per committed mutation with
+   * the `LedgerEntry` (patch + inverse + timestamp). Returns an unsubscribe
+   * handle. Sinks are invoked in subscription order; a Promise return is
+   * fire-and-forget from the Ledger's perspective.
+   *
+   * Rollback does NOT retroactively notify sinks — it pops history entries
+   * in place. If a sink needs to know about undos, wire that intent through
+   * your own entries (e.g., a sink that writes every entry as an append-only
+   * event log will see "set" then no "undo" event; design for that).
+   */
+  subscribe(sink: Sink<PatchData>): Unsubscribe {
+    this._sinks.add(sink);
+    return () => {
+      this._sinks.delete(sink);
+    };
   }
 
   /** Readonly view of every committed mutation, oldest first. */

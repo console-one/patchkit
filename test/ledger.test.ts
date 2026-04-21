@@ -5,7 +5,7 @@ import { ArrayType, ARRAY_OP } from "../src/types/array.js";
 import { SetType } from "../src/types/set.js";
 import { NumberType } from "../src/types/number.js";
 import { Source, MUTATION } from "../src/types/source.js";
-import { ledger, Ledger } from "../src/ledger.js";
+import { ledger, Ledger, type LedgerEntry, type Sink } from "../src/ledger.js";
 
 // ObjectType ------------------------------------------------------------
 
@@ -69,7 +69,7 @@ describe("Ledger<ObjectType> — deep / nested mutation", () => {
     );
     (app.state.settings as { theme: string }).theme = "dark";
     expect(app.history).toHaveLength(1);
-    const patch = app.history[0].patch as {
+    const patch = app.history[0].patch as unknown as {
       settings: { __type: string; theme: { command: string; value: string } };
     };
     expect(patch.settings.__type).toBe("object:patch");
@@ -105,7 +105,7 @@ describe("Ledger<ObjectType> — deep / nested mutation", () => {
     );
     const a = app.state.a as { b: { c: number } };
     a.b.c = 42;
-    const patch = app.history[0].patch as {
+    const patch = app.history[0].patch as unknown as {
       a: { b: { c: { command: string; value: number } } };
     };
     expect(patch.a.b.c).toEqual({ command: OBJECT_COMMAND.SET, value: 42 });
@@ -336,5 +336,109 @@ describe("Ledger coordinator features (checkpoint/restore/reset)", () => {
     const app = ledger({ __type: "object:state", x: 1 }, { type: mkType() });
     const save = app.checkpoint();
     expect(app.restore(save)).toBe(0);
+  });
+});
+
+describe("Ledger.subscribe(sink)", () => {
+  const mkType = () => new ObjectType(new Typeset("test"));
+
+  it("notifies the sink for each commit, in order", () => {
+    const app = ledger({ __type: "object:state", x: 0 }, { type: mkType() });
+    const seen: number[] = [];
+    app.subscribe({
+      onEntry(entry) {
+        const p = entry.patch as unknown as { x: { value: number } };
+        seen.push(p.x.value);
+      },
+    });
+    (app.state as { x: number }).x = 1;
+    (app.state as { x: number }).x = 2;
+    (app.state as { x: number }).x = 3;
+    expect(seen).toEqual([1, 2, 3]);
+  });
+
+  it("returns an unsubscribe handle that detaches the sink", () => {
+    const app = ledger({ __type: "object:state", x: 0 }, { type: mkType() });
+    let count = 0;
+    const off = app.subscribe({
+      onEntry: () => {
+        count++;
+      },
+    });
+    (app.state as { x: number }).x = 1;
+    off();
+    (app.state as { x: number }).x = 2;
+    expect(count).toBe(1);
+  });
+
+  it("multiple sinks each receive every entry", () => {
+    const app = ledger({ __type: "object:state", x: 0 }, { type: mkType() });
+    const a: LedgerEntry<unknown>[] = [];
+    const b: LedgerEntry<unknown>[] = [];
+    app.subscribe({ onEntry: (e) => a.push(e) });
+    app.subscribe({ onEntry: (e) => b.push(e) });
+    (app.state as { x: number }).x = 1;
+    (app.state as { x: number }).x = 2;
+    expect(a).toHaveLength(2);
+    expect(b).toHaveLength(2);
+    expect(a[0].at).toEqual(b[0].at);
+  });
+
+  it("async sinks don't block commit — Ledger stays synchronous", async () => {
+    const app = ledger({ __type: "object:state", x: 0 }, { type: mkType() });
+    const awaited: number[] = [];
+    let resolver: (() => void) | null = null;
+    const gate = new Promise<void>((r) => {
+      resolver = r;
+    });
+
+    const sink: Sink<unknown> = {
+      async onEntry(entry) {
+        await gate;
+        const p = entry.patch as unknown as { x: { value: number } };
+        awaited.push(p.x.value);
+      },
+    };
+    app.subscribe(sink);
+
+    (app.state as { x: number }).x = 1;
+    (app.state as { x: number }).x = 2;
+    // Mutation completes even though the sink is gated.
+    expect(app.history).toHaveLength(2);
+    expect(awaited).toHaveLength(0);
+
+    resolver!();
+    await gate;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(awaited).toEqual([1, 2]);
+  });
+
+  it("a thrown or rejected sink callback doesn't affect the Ledger's state", async () => {
+    const app = ledger({ __type: "object:state", x: 0 }, { type: mkType() });
+    app.subscribe({
+      onEntry() {
+        return Promise.reject(new Error("downstream boom")).catch(() => {
+          /* swallowed on purpose — sink owns its own failure */
+        });
+      },
+    });
+    (app.state as { x: number }).x = 1;
+    // The mutation landed locally; the sink's failure is its own problem.
+    expect((app.state as { x: number }).x).toBe(1);
+    expect(app.history).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
+  it("rollback does not fire the sink (history pop is silent)", () => {
+    const app = ledger({ __type: "object:state", x: 0 }, { type: mkType() });
+    let count = 0;
+    app.subscribe({
+      onEntry: () => {
+        count++;
+      },
+    });
+    (app.state as { x: number }).x = 1;
+    app.rollback();
+    expect(count).toBe(1);
   });
 });

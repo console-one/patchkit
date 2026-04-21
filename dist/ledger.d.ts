@@ -19,6 +19,20 @@ export interface LedgerOptions<StateData, PatchData> {
 /** Opaque handle returned by {@link Ledger.checkpoint}. */
 export type Checkpoint = number;
 /**
+ * A downstream observer of Ledger commits. Called once per entry, in the
+ * order entries are committed. The Ledger does not await or serialize
+ * `onEntry` — returning a Promise is legal (for async persistence, network
+ * replication, etc.) but the Ledger's own state advances synchronously
+ * regardless. If you need backpressure, ordered persistence, retry-on-
+ * failure, or reload reconciliation, wire those up in a Sink wrapper —
+ * the Ledger intentionally stays honest about being an in-memory log.
+ */
+export interface Sink<PatchData> {
+    onEntry(entry: LedgerEntry<PatchData>): void | Promise<void>;
+}
+/** Handle returned by {@link Ledger.subscribe} to detach a sink. */
+export type Unsubscribe = () => void;
+/**
  * Coordinates a live mutable state with a replayable patch history. The
  * shape of the mutable surface (`state`) comes from whichever `DataType`
  * you pass in — `ObjectType` hands you a recursively-tracked Proxy,
@@ -40,8 +54,21 @@ export declare class Ledger<StateData, PatchData = unknown, TrackedSurface = Sta
     private _current;
     private readonly _history;
     private readonly _cell;
+    private readonly _sinks;
     readonly state: TrackedSurface;
     constructor(initial: StateData, opts: LedgerOptions<StateData, PatchData>);
+    /**
+     * Attach a downstream observer. Called once per committed mutation with
+     * the `LedgerEntry` (patch + inverse + timestamp). Returns an unsubscribe
+     * handle. Sinks are invoked in subscription order; a Promise return is
+     * fire-and-forget from the Ledger's perspective.
+     *
+     * Rollback does NOT retroactively notify sinks — it pops history entries
+     * in place. If a sink needs to know about undos, wire that intent through
+     * your own entries (e.g., a sink that writes every entry as an append-only
+     * event log will see "set" then no "undo" event; design for that).
+     */
+    subscribe(sink: Sink<PatchData>): Unsubscribe;
     /** Readonly view of every committed mutation, oldest first. */
     get history(): readonly LedgerEntry<PatchData>[];
     /** Current state snapshot (raw, not the tracker surface). */

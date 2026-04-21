@@ -20,6 +20,7 @@ export class Ledger {
     _current;
     _history = [];
     _cell;
+    _sinks = new Set();
     state;
     constructor(initial, opts) {
         this.opts = opts;
@@ -31,8 +32,31 @@ export class Ledger {
             },
         };
         this.state = opts.type.track(this._cell, (patch, inverse) => {
-            this._history.push({ patch, inverse, at: new Date() });
+            const entry = { patch, inverse, at: new Date() };
+            this._history.push(entry);
+            for (const sink of this._sinks) {
+                // Deliberately not awaited. Sinks that care about ordering or
+                // backpressure should wrap themselves; the Ledger stays sync.
+                void sink.onEntry(entry);
+            }
         });
+    }
+    /**
+     * Attach a downstream observer. Called once per committed mutation with
+     * the `LedgerEntry` (patch + inverse + timestamp). Returns an unsubscribe
+     * handle. Sinks are invoked in subscription order; a Promise return is
+     * fire-and-forget from the Ledger's perspective.
+     *
+     * Rollback does NOT retroactively notify sinks — it pops history entries
+     * in place. If a sink needs to know about undos, wire that intent through
+     * your own entries (e.g., a sink that writes every entry as an append-only
+     * event log will see "set" then no "undo" event; design for that).
+     */
+    subscribe(sink) {
+        this._sinks.add(sink);
+        return () => {
+            this._sinks.delete(sink);
+        };
     }
     /** Readonly view of every committed mutation, oldest first. */
     get history() {

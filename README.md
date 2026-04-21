@@ -169,6 +169,35 @@ All share the coordinator surface: `app.history`, `app.rollback(n)`, `app.checkp
 - **Inspectable, serializable entries**: each history entry is a real patchkit patch — replayable on any state, shippable over the wire, renderable as an audit trail.
 - **Polymorphic**: the Ledger shape is the same regardless of the underlying type.
 
+### Observing commits — sync core, async sinks
+
+Mutation is synchronous by necessity — Proxy `set` traps can't be awaited. That means the Ledger's local state advances on the call stack, without blocking on any downstream persistence, network, or replication. If you want those things, attach a `Sink`:
+
+```ts
+const app = ledger(initialState, { type });
+
+const off = app.subscribe({
+  async onEntry(entry) {
+    await db.append(entry.patch);        // durable log
+    // or: await replicator.send(entry.patch)
+    // or: await eventBus.emit('patch', entry)
+  },
+});
+
+app.state.role = "architect";             // returns synchronously
+// ...the sink above fires, awaited by the sink internally, not by the Ledger.
+```
+
+The Ledger does not await `onEntry`. Returning a Promise is legal but fire-and-forget from the Ledger's perspective. This is a deliberate choice — the Ledger is an in-memory log; backpressure, retry, ordered persistence, and reload-time reconciliation belong in whatever Sink layer you put on top. The Ledger stays honest about what JS Proxies actually support.
+
+Useful Sink shapes:
+- **Durable log** — append the patch to disk/DB; flush on shutdown.
+- **Replicator** — send each patch over the wire to peers.
+- **Optimistic-update coordinator** — mark entries `pending`, confirm/reject asynchronously, call `app.rollback()` on rejection.
+- **Observability** — log, metric, or audit-trail each commit.
+
+Rollback does not fire the sink — history pops in place. If your Sink needs "undo" awareness, issue your own forward operations rather than relying on rollback (e.g., `state.role = prior`) so the sink sees the compensating patch as a first-class entry.
+
 ## The `DataType` contract
 
 Every `DataType<StateData, PatchData, QueryData, TrackedState>` implements:
