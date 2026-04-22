@@ -8,4 +8,5 @@ export * from "./types/object.js";
 export * from "./types/number.js";
 export * from "./types/any.js";
 export * from "./ledger.js";
+export type { Paths, PathValue, PatchEvent, TypedObjectPatch } from "./paths.js";
 //# sourceMappingURL=index.d.ts.map

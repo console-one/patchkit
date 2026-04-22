@@ -310,4 +310,80 @@ describe("ObjectMutator builder", () => {
     expect(p["a"]).toEqual({ command: OBJECT_COMMAND.CUT, value: cg.toJSON() });
     expect(p["b"]).toEqual({ command: OBJECT_COMMAND.COPY, value: cg.toJSON() });
   });
+
+  it("default() records a DEFAULT command", () => {
+    const p = new ObjectMutator().default("theme", "dark").build();
+    expect(p["theme"]).toEqual({ command: OBJECT_COMMAND.DEFAULT, value: "dark" });
+  });
+});
+
+describe("ObjectType — DEFAULT command", () => {
+  const t = mkType();
+
+  it("sets the key when current state is undefined", () => {
+    const state = { __type: "object:state", name: "Andrew" };
+    const patch = {
+      __type: "object:patch",
+      role: { command: OBJECT_COMMAND.DEFAULT, value: "engineer" },
+    };
+    const { state: next } = t.applyPatch(patch, state);
+    expect(next["role"]).toBe("engineer");
+  });
+
+  it("is a no-op when current state has a value", () => {
+    const state = { __type: "object:state", name: "Andrew", role: "architect" };
+    const patch = {
+      __type: "object:patch",
+      role: { command: OBJECT_COMMAND.DEFAULT, value: "engineer" },
+    };
+    const { state: next } = t.applyPatch(patch, state);
+    expect(next["role"]).toBe("architect");
+  });
+
+  it("treats explicit undefined as 'no value' — DEFAULT fills it", () => {
+    const state = { __type: "object:state", name: "Andrew", role: undefined };
+    const patch = {
+      __type: "object:patch",
+      role: { command: OBJECT_COMMAND.DEFAULT, value: "engineer" },
+    };
+    const { state: next } = t.applyPatch(patch, state);
+    expect(next["role"]).toBe("engineer");
+  });
+
+  it("does NOT overwrite a null value (null is a value)", () => {
+    const state = { __type: "object:state", name: "Andrew", role: null };
+    const patch = {
+      __type: "object:patch",
+      role: { command: OBJECT_COMMAND.DEFAULT, value: "engineer" },
+    };
+    const { state: next } = t.applyPatch(patch, state);
+    expect(next["role"]).toBeNull();
+  });
+
+  it("composes with SET via collate: DEFAULT then SET leaves SET's value", () => {
+    const initial = { __type: "object:patch", flag: { command: OBJECT_COMMAND.DEFAULT, value: "seed" } };
+    const override = { __type: "object:patch", flag: { command: OBJECT_COMMAND.SET, value: "real" } };
+    const combined = t.collate([initial, override]);
+    const { state: next } = t.applyPatch(combined, { __type: "object:state" });
+    expect(next["flag"]).toBe("real");
+  });
+});
+
+describe("TypedObjectPatch — compile-time path typing", () => {
+  // This suite is type-level. If it compiles, the behaviour is correct.
+  // Runtime checks included as guards that the types accept the values we expect.
+  type State = { user: { name: string; age: number; tags: string[] } };
+
+  it("TypedObjectPatch<T> accepts well-formed patches (structural)", () => {
+    // Structural: a patch with a SET at user.name should be assignable.
+    const typed: import("../src/paths.js").TypedObjectPatch<State> = {
+      __type: "object:patch",
+      user: {
+        __type: "object:patch",
+        name: { command: OBJECT_COMMAND.SET, value: "Alice" },
+        age: { command: OBJECT_COMMAND.DEFAULT, value: 0 },
+      },
+    };
+    expect((typed.user as any).name.value).toBe("Alice");
+  });
 });

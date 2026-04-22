@@ -21,6 +21,13 @@ export const OBJECT_COMMAND = {
   CUT: "CUT",
   COPY: "COPY",
   PATCH: "PATCH",
+  /**
+   * Set the key only if the current state has no value at that key. Otherwise
+   * no-op. Atomic analog to `if (state[k] === undefined) state[k] = v`, useful
+   * for initialization layers where later writes should win but gaps should be
+   * filled.
+   */
+  DEFAULT: "DEFAULT",
 } as const;
 
 export type ObjectCommandKind = (typeof OBJECT_COMMAND)[keyof typeof OBJECT_COMMAND];
@@ -86,7 +93,8 @@ function isCommand(value: unknown): value is ObjectCommand {
     cmd === OBJECT_COMMAND.DELETE ||
     cmd === OBJECT_COMMAND.CUT ||
     cmd === OBJECT_COMMAND.COPY ||
-    cmd === OBJECT_COMMAND.PATCH
+    cmd === OBJECT_COMMAND.PATCH ||
+    cmd === OBJECT_COMMAND.DEFAULT
   );
 }
 
@@ -225,6 +233,12 @@ export class ObjectType extends DataType<ObjectState, ObjectPatch, ObjectQuery> 
         }
         if (entry.command === OBJECT_COMMAND.DELETE) {
           delete next[key];
+          continue;
+        }
+        if (entry.command === OBJECT_COMMAND.DEFAULT) {
+          if (state[key] === undefined) {
+            next[key] = resolveCaptureValue(entry.value, ctx.captureGroups);
+          }
           continue;
         }
         if (entry.command === OBJECT_COMMAND.PATCH) {
@@ -466,6 +480,16 @@ export class ObjectMutator {
 
   delete(key: string): this {
     this.ops[key] = { command: OBJECT_COMMAND.DELETE };
+    return this;
+  }
+
+  /**
+   * Record a DEFAULT command: set the key only if the target state has no
+   * value there at apply time. Used to seed initial values without
+   * overwriting later-committed ones.
+   */
+  default(key: string, value: unknown): this {
+    this.ops[key] = { command: OBJECT_COMMAND.DEFAULT, value };
     return this;
   }
 

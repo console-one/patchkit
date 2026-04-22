@@ -6,6 +6,13 @@ export const OBJECT_COMMAND = {
     CUT: "CUT",
     COPY: "COPY",
     PATCH: "PATCH",
+    /**
+     * Set the key only if the current state has no value at that key. Otherwise
+     * no-op. Atomic analog to `if (state[k] === undefined) state[k] = v`, useful
+     * for initialization layers where later writes should win but gaps should be
+     * filled.
+     */
+    DEFAULT: "DEFAULT",
 };
 export const COLLATE_STRATEGY = {
     OVERRIDE: "OVERRIDE",
@@ -34,7 +41,8 @@ function isCommand(value) {
         cmd === OBJECT_COMMAND.DELETE ||
         cmd === OBJECT_COMMAND.CUT ||
         cmd === OBJECT_COMMAND.COPY ||
-        cmd === OBJECT_COMMAND.PATCH);
+        cmd === OBJECT_COMMAND.PATCH ||
+        cmd === OBJECT_COMMAND.DEFAULT);
 }
 function isNestedPatch(value, typeName) {
     if (typeof value !== "object" || value === null)
@@ -174,6 +182,12 @@ export class ObjectType extends DataType {
                 }
                 if (entry.command === OBJECT_COMMAND.DELETE) {
                     delete next[key];
+                    continue;
+                }
+                if (entry.command === OBJECT_COMMAND.DEFAULT) {
+                    if (state[key] === undefined) {
+                        next[key] = resolveCaptureValue(entry.value, ctx.captureGroups);
+                    }
                     continue;
                 }
                 if (entry.command === OBJECT_COMMAND.PATCH) {
@@ -394,6 +408,15 @@ export class ObjectMutator {
     }
     delete(key) {
         this.ops[key] = { command: OBJECT_COMMAND.DELETE };
+        return this;
+    }
+    /**
+     * Record a DEFAULT command: set the key only if the target state has no
+     * value there at apply time. Used to seed initial values without
+     * overwriting later-committed ones.
+     */
+    default(key, value) {
+        this.ops[key] = { command: OBJECT_COMMAND.DEFAULT, value };
         return this;
     }
     cut(key, capture) {

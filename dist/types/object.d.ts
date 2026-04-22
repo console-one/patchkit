@@ -6,6 +6,13 @@ export declare const OBJECT_COMMAND: {
     readonly CUT: "CUT";
     readonly COPY: "COPY";
     readonly PATCH: "PATCH";
+    /**
+     * Set the key only if the current state has no value at that key. Otherwise
+     * no-op. Atomic analog to `if (state[k] === undefined) state[k] = v`, useful
+     * for initialization layers where later writes should win but gaps should be
+     * filled.
+     */
+    readonly DEFAULT: "DEFAULT";
 };
 export type ObjectCommandKind = (typeof OBJECT_COMMAND)[keyof typeof OBJECT_COMMAND];
 export declare const COLLATE_STRATEGY: {
@@ -90,6 +97,12 @@ export declare class ObjectMutator {
     constructor(typeName?: string);
     set(key: string, value: unknown): this;
     delete(key: string): this;
+    /**
+     * Record a DEFAULT command: set the key only if the target state has no
+     * value there at apply time. Used to seed initial values without
+     * overwriting later-committed ones.
+     */
+    default(key: string, value: unknown): this;
     cut(key: string, capture: CaptureGroup): this;
     copy(key: string, capture: CaptureGroup): this;
     patch(key: string, inner: (mutator: ObjectMutator) => void): this;
