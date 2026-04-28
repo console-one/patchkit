@@ -1,6 +1,6 @@
 {
   "name": "@console-one/patchkit",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Polymorphic DataType interface for version control over arbitrary data (Object, Array, Set, Source/text) with a live-mutation Ledger on top",
   "repository": {
     "type": "git",
