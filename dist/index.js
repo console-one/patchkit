@@ -7,5 +7,4 @@ export * from "./types/source.js";
 export * from "./types/object.js";
 export * from "./types/number.js";
 export * from "./types/any.js";
-export * from "./ledger.js";
 //# sourceMappingURL=index.js.map
